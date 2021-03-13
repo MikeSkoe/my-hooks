@@ -1,8 +1,3 @@
-type GetSet<T> = [
-    () => T,
-    (update: (prev: T) => T) => void,
-];
-
 type HooksHolder = {
     vals: any[],
     hashs: string[],
@@ -15,7 +10,6 @@ const NOP = () => void 0;
 const initHooks = () => {
     const hooksFact: {[key: string]: HooksHolder} = {};
     let callKeys: string[] = [];
-    let factoryIndex = 0;
 
     const cycle = () => {
         Object.keys(hooksFact).forEach(
@@ -26,13 +20,11 @@ const initHooks = () => {
                 }
             },
         );
-        factoryIndex = 0;
         callKeys = [];
     };
 
     const makeHooks = (
         str: string,
-        callback?: () => void,
     ) => {
         hooksFact[str] = hooksFact[str] || {vals: [], hashs: [], callbacks: []};
         callKeys.push(str);
@@ -40,69 +32,73 @@ const initHooks = () => {
         const hooks = hooksFact[str];
         let index = 0;
 
+        const getPosAndUpdate = (): {
+            valGetter: () => any;
+            hashGetter: () => any;
+            callbackGetter: () => any;
+            updateData: (val: any, hash: string, callback: () => void) => void,
+        } => {
+            const pos = index++;
+            const valGetter = () => hooks.vals[pos];
+            const hashGetter = () => hooks.hashs[pos];
+            const callbackGetter = () => hooks.callbacks[pos];
+            const updateData = (val: any, hash: string, callback: () => void) => {
+                hooks.vals[pos] = val;
+                hooks.hashs[pos] = hash;
+                hooks.callbacks[pos]?.();
+                hooks.callbacks[pos] = callback;
+            }
+
+            return {
+                valGetter,
+                hashGetter,
+                callbackGetter,
+                updateData,
+            };
+        }
+
         const useState = <T>(
             initialState: T,
-        ): GetSet<T> => {
+        ): [() => T, (update: (prev: T) => T) => void] => {
             // TODO: remove repetitions
-            const pos = index++;
-            const updateData = newData => {
-                hooks.vals[pos] = newData;
-                   //  update(getter());
-                hooks.hashs[pos] = '';
-                hooks.callbacks[pos] = NOP;
-            }
-            const getter = () => hooks.vals[pos];
-            const setter = update => {
-                updateData(update(getter()));
-                // cycle();
-                callback?.();
+            const {updateData, valGetter} = getPosAndUpdate();
+            const setter = (update: (prev: T) => T) => {
+                updateData(update(valGetter()), '', NOP);
             };
-            const isInitial = getter() === undefined;
+            const isInitial = valGetter() === undefined;
 
             if (isInitial) {
-                updateData(initialState);
+                updateData(initialState, '', NOP);
             }
 
-            return [getter, setter];
+            return [valGetter, setter];
         };
 
         const useMemo = <T>(
             getState: () => T,
             hash: string,
-        ) => {
-            const pos = index++;
-            const updateData = (newData, hash) => {
-                hooks.vals[pos] = newData;
-                hooks.hashs[pos] = hash;
-                hooks.callbacks[pos] = NOP;
-            }
-            const getter = () => hooks.vals[pos];
-            const hashGetter = () => hooks.hashs[pos];
-            const isInitial = getter() === undefined;
+        ): T => {
+            const {updateData, valGetter, hashGetter} = getPosAndUpdate();
+            const isInitial = valGetter() === undefined;
             const hashChanged = hash !== hashGetter();
 
             if (isInitial || hashChanged) {
-                updateData(getState(), hash);
+                updateData(getState(), hash, NOP);
             }
 
-            return getter();
+            return valGetter();
         }
 
         const useEffect = (
             effect: () => (() => void) | void,
             hash: string,
         ) => {
-            const pos = index++;
-            const getter = () => hooks.callbacks[pos];
-            const hashGetter = () => hooks.hashs[pos];
-            const isInitial = getter() === undefined;
+            const {updateData, valGetter, hashGetter} = getPosAndUpdate();
+            const isInitial = valGetter() === undefined;
             const hashChanged = hash !== hashGetter();
 
             if (isInitial || hashChanged) {
-                hooks.vals[pos] = null;
-                hooks.hashs[pos] = hash;
-                hooks.callbacks[pos]?.();
-                hooks.callbacks[pos] = effect() || NOP;
+                updateData(null, hash, effect() || NOP);
             }
         }
 
@@ -134,7 +130,7 @@ const Item = (item: number) => {
 }
 
 const Component = (items: number[]) => {
-    const {useState, useMemo, useEffect} = makeHooks('Counter');
+    const {useState, useMemo} = makeHooks('Counter');
     const [getCounter, setCounter] = useState(1);
     const [getICounter, setICounter] = useState(100);
 
